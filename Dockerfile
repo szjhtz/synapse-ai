@@ -9,7 +9,7 @@ COPY frontend/ .
 RUN npm run build
 
 # Stage 2: Combined runtime (Python backend + Node.js frontend)
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y \
     curl build-essential libpq-dev supervisor \
@@ -37,8 +37,8 @@ COPY docker/supervisord.conf /etc/supervisor/conf.d/synapse.conf
 ENV SYNAPSE_DATA_DIR=/data
 ENV PYTHONPATH=/app/backend
 ENV NODE_ENV=production
-ENV BACKEND_URL=http://localhost:8765
-ENV PORT=3000
+ENV SYNAPSE_BACKEND_PORT=8765
+ENV SYNAPSE_FRONTEND_PORT=3000
 
 EXPOSE 3000 8765
 
