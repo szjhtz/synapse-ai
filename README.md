@@ -83,6 +83,23 @@ docker run -d \
   synapseorchai/synapse-ai:latest
 ```
 
+#### Custom ports
+
+Override the default ports (frontend `3000`, backend `8765`) with environment variables:
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  -p 9000:9000 \
+  -e SYNAPSE_FRONTEND_PORT=8080 \
+  -e SYNAPSE_BACKEND_PORT=9000 \
+  -v synapse-data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  synapseorchai/synapse-ai:latest
+```
+
+The `-p HOST:CONTAINER` values must match the `-e` values.
+
 ### Upgrading
 
 | Install method | Upgrade command |
