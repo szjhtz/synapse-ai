@@ -516,16 +516,16 @@ export const AgentsTab = ({
                                                         <div
                                                             onClick={() => setDraftAgent({ ...draftAgent, delegate_agent_ids: [] })}
                                                             className={`p-3 border cursor-pointer transition-all flex items-center gap-3
-                                                                ${allSelected ? 'bg-zinc-900 border-rose-700/50' : 'bg-black border-zinc-800 hover:border-zinc-600'}`}
+                                                                ${allSelected ? 'bg-zinc-900 border-zinc-600' : 'bg-black border-zinc-800 hover:border-zinc-600'}`}
                                                         >
                                                             <div className={`w-3 h-3 border flex-shrink-0 flex items-center justify-center
-                                                                ${allSelected ? 'bg-rose-500 border-rose-500' : 'border-zinc-600'}`}
+                                                                ${allSelected ? 'bg-green-500 border-green-500' : 'border-zinc-600'}`}
                                                             />
                                                             <div className="flex-1 min-w-0">
                                                                 <div className="text-xs font-bold text-white">All Agents</div>
                                                                 <div className="text-[9px] text-zinc-500">Allow delegation to any available agent</div>
                                                             </div>
-                                                            {allSelected && <span className="text-[9px] px-1.5 py-0.5 bg-rose-900/50 text-rose-400 border border-rose-900 rounded">ACTIVE</span>}
+                                                            {allSelected && <span className="text-[9px] px-1.5 py-0.5 bg-green-900/50 text-green-400 border border-green-900 rounded">ACTIVE</span>}
                                                         </div>
 
                                                         {/* Individual agents */}
@@ -545,11 +545,11 @@ export const AgentsTab = ({
                                                                             setDraftAgent({ ...draftAgent, delegate_agent_ids: newIds });
                                                                         }}
                                                                         className={`p-3 border cursor-pointer transition-all
-                                                                            ${isSelected ? 'bg-zinc-900 border-rose-700/50' : allSelected ? 'bg-zinc-900/30 border-zinc-800 opacity-60' : 'bg-black border-zinc-800 hover:border-zinc-600'}`}
+                                                                            ${isSelected ? 'bg-zinc-900 border-zinc-600' : allSelected ? 'bg-zinc-900/30 border-zinc-800 opacity-60' : 'bg-black border-zinc-800 hover:border-zinc-600'}`}
                                                                     >
                                                                         <div className="flex items-center gap-2">
                                                                             <div className={`w-3 h-3 border flex-shrink-0
-                                                                                ${isSelected ? 'bg-rose-500 border-rose-500' : 'border-zinc-600'}`}
+                                                                                ${isSelected ? 'bg-green-500 border-green-500' : 'border-zinc-600'}`}
                                                                             />
                                                                             <div className="flex-1 min-w-0">
                                                                                 <div className="text-xs font-bold text-white truncate">{a.name}</div>
