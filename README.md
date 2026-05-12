@@ -1,20 +1,23 @@
 # Synapse AI — Multi-Agent Orchestration Platform
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/f11290ed-dde2-493f-9c5a-9423b9679f1c" alt="synapse-ai-github" width="600" />
+  <img src="https://github.com/user-attachments/assets/c673ea6f-4979-4b38-93ae-c594ac3d641c" alt="synapse-ai-github" width="600" />
 </p>
 
 <p align="center">
   <a href="https://discord.gg/9UN45qyGh8"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/naveenraj-17/synapse-ai"><img src="https://img.shields.io/github/stars/naveenraj-17/synapse-ai?style=social" alt="GitHub stars"></a>
-  <a href="https://github.com/naveenraj-17/synapse-ai?tab=AGPL-3.0-1-ov-file"><img src="https://img.shields.io/github/license/naveenraj-17/synapse-ai" alt="License"></a>
+  <a href="https://github.com/synapseorch-ai/synapse-ai"><img src="https://img.shields.io/github/stars/synapseorch-ai/synapse-ai?style=social" alt="GitHub stars"></a>
+  <a href="https://github.com/synapseorch-ai/synapse-ai?tab=AGPL-3.0-1-ov-file"><img src="https://img.shields.io/github/license/synapseorch-ai/synapse-ai" alt="License"></a>
   <a href="https://www.npmjs.com/package/synapse-orch-ai"><img src="https://img.shields.io/npm/v/synapse-orch-ai?logo=npm&label=npm" alt="npm"></a>
   <a href="https://pypi.org/project/synapse-orch-ai/"><img src="https://img.shields.io/pypi/v/synapse--orch-ai?logo=pypi&logoColor=white&label=pypi" alt="PyPI"></a>
+  <a href="https://hub.docker.com/r/synapseorchai/synapse-ai"><img src="https://img.shields.io/docker/pulls/synapseorchai/synapse-ai?logo=docker&logoColor=white&label=docker" alt="Docker Pulls"></a>
 </p>
 
 *Build AI workflows that actually ship.*
 
 **Wire agents, tools, and LLMs into deterministic pipelines — without the framework lock-in.** Synapse is an open-source platform for creating, connecting, and orchestrating AI agents powered by any LLM — local or cloud. Agents use real tools: browsing the web, querying databases, executing code, reading files, managing emails, trading stocks, and anything else you can expose through an MCP server, a webhook, or a Python script — if you can write it, agents can use it.
+
+Businesses use Synapse to convert their existing APIs and Python programs into agent tools, orchestrate them into end-to-end workflows, and build AI-powered products on top of the REST API — without starting from scratch or locking into a vendor.
 
 ---
 
@@ -35,12 +38,12 @@ The easiest way to get started. Clones the repository, installs all dependencies
 
 **macOS / Linux:**
 ```bash
-curl -sSL https://raw.githubusercontent.com/naveenraj-17/synapse-ai/main/setup.sh | bash
+curl -sSL https://raw.githubusercontent.com/synapseorch-ai/synapse-ai/main/setup.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/naveenraj-17/synapse-ai/main/setup.ps1 | iex
+irm https://raw.githubusercontent.com/synapseorch-ai/synapse-ai/main/setup.ps1 | iex
 ```
 
 ### npm
@@ -54,6 +57,57 @@ synapse
 pip install synapse-orch-ai
 synapse
 ```
+
+### Docker
+No Python or Node.js required on the host. Ideal for teams deploying on shared infrastructure or servers.
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -v synapse-data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  synapseorchai/synapse-ai:latest
+```
+
+Then open `http://localhost:3000`. Pass your LLM API keys and any config as environment variables:
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -v synapse-data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e OPENAI_API_KEY=sk-... \
+  -e OLLAMA_BASE_URL=http://host-gateway:11434 \
+  --add-host=host-gateway:host-gateway \
+  synapseorchai/synapse-ai:latest
+```
+
+#### Custom ports
+
+Override the default ports (frontend `3000`, backend `8765`) with environment variables:
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  -p 9000:9000 \
+  -e SYNAPSE_FRONTEND_PORT=8080 \
+  -e SYNAPSE_BACKEND_PORT=9000 \
+  -v synapse-data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  synapseorchai/synapse-ai:latest
+```
+
+The `-p HOST:CONTAINER` values must match the `-e` values.
+
+### Upgrading
+
+| Install method | Upgrade command |
+|---|---|
+| Bash / PowerShell installer (recommended) | `synapse upgrade` |
+| pip | `pip install --upgrade synapse-orch-ai` |
+| npm | `npm update -g synapse-orch-ai` |
+| Docker | `docker pull synapseorchai/synapse-ai:latest` |
 
 ---
 
@@ -82,10 +136,13 @@ Run a different model at every step. Use a fast, cheap model for routing and cla
 Orchestrations are strict DAGs. Execution follows the exact path you defined — no surprises, no hallucinated detours. For steps where the next action is already known (fetch this, parse that, write here), use **Tool** and **LLM** steps instead of full agents: zero reasoning overhead, deterministic output, and far cheaper to run.
 
 ### Turn Anything Into a Tool
+Your existing systems are already the capability — Synapse just makes them available to agents:
 - **Any Python program** → drop it in, it becomes a sandboxed agent tool
-- **Any API or webhook** → describe its schema, agents call it natively
+- **Any REST API or webhook** → describe its schema, agents call it natively
 - **Any MCP server** → local subprocess or remote HTTP, connected in seconds
 - **Any orchestration** → promote it to an agent; chain orchestrations like functions
+
+This is the path most businesses take: existing CRM APIs, internal Python scripts, ML models, and third-party services all become agent-callable tools without a rewrite.
 
 ### Never Blocked on a Human Decision
 **Human** steps pause execution mid-workflow and wait. When the person responds — via the UI, Slack, Telegram, or any connected messaging channel — the run resumes exactly where it left off. No polling, no timeouts you didn't set.
@@ -199,15 +256,21 @@ Arguments: mcp-server-git
 
 Use the **Git** preset to auto-fill this. Add environment variables (API keys, secrets) directly in the form — no config file editing required.
 
-### Custom Tools (n8n & Python)
+### Custom Tools — Your APIs and Python Scripts
 
-Turn any automation workflow or Python logic into an agent tool.
+Turn any existing API or Python program into an agent tool — no rewrites, no new infrastructure.
 
-1. Build a workflow in n8n (or any webhook-compatible tool), or expose an API via a Python program
-2. Add it to Synapse in **Settings → Custom Tools**
-3. Your agent now has that tool — it sees the name, description, and schema, and calls it like any other tool
+**Register an API endpoint:**
+1. Go to **Settings → Custom Tools** and add a tool with its name, description, endpoint, and parameter schema
+2. Agents see the name and description to decide when to call it, and pass parameters automatically
+3. Works with any REST API, internal service, or webhook — your CRM, billing system, ML inference endpoint, anything
 
-This is the fastest way to give agents access to internal APIs, proprietary systems, or multi-step processes that you've already automated. n8n's 400+ node library or your own custom Python logic becomes your agent's extended toolkit.
+**Register a Python script:**
+1. Paste your existing Python function — it runs in Synapse's sandboxed Docker executor
+2. Define its input parameters and expected output shape
+3. It becomes a callable tool for any agent you assign it to
+
+This is the fastest path for businesses: your existing Python scripts (ETL jobs, ML models, data processors) and internal APIs become your agents' extended toolkit. Build an n8n workflow, expose it as a webhook, and add it here — 400+ node integrations become one agent tool in minutes.
 
 ---
 
@@ -439,6 +502,66 @@ The included "Stock Intraday Trading" orchestration shows how to combine market 
 
 ---
 
+## Example: Business Workflow — API-Driven Orchestration
+
+Businesses with existing APIs and Python scripts can wire them directly into orchestrations. Here is a customer renewal pipeline where every step calls your own systems:
+
+```
+Customer ID (triggered from your CRM or product event)
+    │
+    ▼
+[1. Customer Agent]           → Calls your CRM API, usage metrics API, support ticket API
+    │ output: customer_profile
+    ▼
+[2. Parallel Analysis]
+    ├── [Risk Analyst]        → Runs your churn prediction Python model as a tool
+    └── [Finance Agent]       → Calls your billing API for contract value and payment history
+    │ output: churn_score, contract_data
+    ▼
+[3. Merge + Transform]        → Python transform: compute combined risk score
+    │
+    ▼
+[4. Evaluator]                → Routes: "high_risk" → Human Review | "healthy" → Auto-Renew
+    │
+    ▼
+[5. Human Review]             → Account exec reviews summary, approves outreach or escalation
+    │
+    ▼
+[6. Action Agent]             → Updates CRM via API, sends personalized email, posts to Slack
+    │
+    ▼
+[END]
+```
+
+Every step in this pipeline calls **your APIs** and runs **your Python models**. Synapse handles the reasoning, routing, and coordination. You own the data, the tools, and the workflow.
+
+---
+
+## Build Products on the Synapse REST API
+
+Synapse exposes a full REST API on port `8765`. Product and engineering teams can trigger agents and orchestrations programmatically from any application — internal dashboards, customer-facing features, or backend services — without building AI infrastructure from scratch.
+
+**Run an agent:**
+```bash
+POST /api/chat/{agent_id}
+{ "message": "Analyze Q3 sales data and flag anomalies" }
+```
+
+**Trigger an orchestration:**
+```bash
+POST /api/orchestrations/{orchestration_id}/run
+{ "initial_state": { "customer_id": "cust_8812", "period": "Q3-2025" } }
+```
+
+**Poll for results:**
+```bash
+GET /api/sessions/{session_id}/status
+```
+
+Your application controls the trigger and consumes the result. Synapse handles the agent reasoning, tool execution, LLM calls, and workflow state in between.
+
+---
+
 ## Schedules
 
 Automate agent and orchestration runs on a recurring schedule.
@@ -504,7 +627,7 @@ Switch providers per-agent or globally in **Settings → Model**.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=naveenraj-17/synapse-ai&type=date&legend=top-left)](https://www.star-history.com/#naveenraj-17/synapse-ai&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=synapseorch-ai/synapse-ai&type=date&legend=top-left)](https://www.star-history.com/#synapseorch-ai/synapse-ai&type=date&legend=top-left)
 
 ---
 
