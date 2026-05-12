@@ -276,6 +276,8 @@ export const CustomToolsTab = ({
                                 >
                                     <option>POST</option>
                                     <option>GET</option>
+                                    <option>PUT</option>
+                                    <option>DELETE</option>
                                 </select>
                             </div>
 
@@ -330,10 +332,10 @@ export const CustomToolsTab = ({
                                 </div>
                             )}
 
-                            {/* Webhook URL */}
+                            {/* URL */}
                             <div className="space-y-1">
                                 <div className="flex items-center gap-2">
-                                    <label className="text-[10px] uppercase font-bold text-zinc-500">Webhook URL</label>
+                                    <label className="text-[10px] uppercase font-bold text-zinc-500">URL</label>
                                     {!n8nIntegrated && (
                                         <span className="text-[9px] text-zinc-600">
                                             (you can also{' '}
@@ -349,8 +351,25 @@ export const CustomToolsTab = ({
                                     value={draftTool.url}
                                     onChange={e => setDraftTool({ ...draftTool, url: e.target.value })}
                                     className="w-full bg-zinc-900 border border-zinc-800 p-2 text-sm text-white focus:border-white focus:outline-none font-mono"
-                                    placeholder="https://example.com/webhook/..."
+                                    placeholder="https://api.example.com/users/{id}"
                                 />
+                                {/* URL templating hint — dynamic based on input schema */}
+                                {(() => {
+                                    let keys: string[] = [];
+                                    try {
+                                        const schema = JSON.parse(draftTool.inputSchemaStr || '{}');
+                                        keys = Object.keys(schema?.properties || {});
+                                    } catch { /* ignore parse errors */ }
+                                    const examples = keys.length
+                                        ? keys.slice(0, 3).map(k => `{${k}}`).join(', ')
+                                        : '{field}';
+                                    return (
+                                        <p className="mt-1 text-[10px] text-zinc-600 leading-relaxed">
+                                            💡 Use <code className="text-zinc-400 bg-zinc-900 px-1 rounded">{examples}</code> in the URL to inject input values.
+                                            {' '}GET/DELETE args become query params; POST/PUT go in the body.
+                                        </p>
+                                    );
+                                })()}
                             </div>
 
                             {/* Headers */}

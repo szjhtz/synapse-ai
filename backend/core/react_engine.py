@@ -923,13 +923,63 @@ async def run_agent_step(
 
                         # ── HTTP / Webhook Tool ───────────────────────────────────
                         try:
-                            method = target_tool.get("method", "POST")
+                            method = target_tool.get("method", "POST").upper()
                             url = target_tool.get("url")
                             headers = target_tool.get("headers", {})
                             if not url:
                                 raise ValueError("No URL configured for this tool.")
 
-                            resp = await client.request(method, url, json=tool_args, headers=headers, timeout=30.0)
+                            # ── URL template interpolation ────────────────────────
+                            # Resolve {data} → full JSON payload, {data.key} → specific
+                            # field (dot-notation supported), consumed keys are tracked
+                            # so they are not redundantly sent in query params / body.
+                            import re as _re
+
+                            consumed_keys: set = set()
+
+                            def _resolve_path(obj: dict, path: str):
+                                """Walk dot-separated path into obj; return str or None."""
+                                parts = path.split(".")
+                                cur = obj
+                                for p in parts:
+                                    if not isinstance(cur, dict) or p not in cur:
+                                        return None
+                                    cur = cur[p]
+                                return str(cur) if not isinstance(cur, (dict, list)) else json.dumps(cur)
+
+                            def _replace_placeholder(m: "_re.Match") -> str:
+                                expr = m.group(1).strip()
+                                # {data} → full JSON payload (legacy)
+                                if expr == "data":
+                                    return json.dumps(tool_args)
+                                # {data.key} → nested dot-notation (legacy)
+                                if expr.startswith("data."):
+                                    path = expr[len("data."):]
+                                    top_key = path.split(".")[0]
+                                    val = _resolve_path(tool_args, path)
+                                    if val is not None:
+                                        consumed_keys.add(top_key)
+                                        return val
+                                # {key} → bare input schema field name (preferred)
+                                if expr in tool_args:
+                                    consumed_keys.add(expr)
+                                    v = tool_args[expr]
+                                    return str(v) if not isinstance(v, (dict, list)) else json.dumps(v)
+                                return m.group(0)  # unrecognised – leave as-is
+
+                            url = _re.sub(r"\{([^}]+)\}", _replace_placeholder, url)
+
+                            # Route args based on HTTP method:
+                            # GET/DELETE → non-consumed args as query params (avoid double-sending path vars)
+                            # POST/PUT   → full args always go in the body (path vars also stay in URL)
+                            if method in ("GET", "DELETE"):
+                                remaining_args = {k: v for k, v in tool_args.items() if k not in consumed_keys}
+                                params = {k: (json.dumps(v) if isinstance(v, (dict, list)) else str(v))
+                                          for k, v in remaining_args.items()}
+                                resp = await client.request(method, url, params=params, headers=headers, timeout=30.0)
+                            else:
+                                # POST / PUT – all args in body even if some were used in the URL
+                                resp = await client.request(method, url, json=tool_args, headers=headers, timeout=30.0)
 
                             json_resp = None
                             try:

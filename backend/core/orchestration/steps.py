@@ -434,12 +434,16 @@ class ToolStepExecutor:
                     actual_tool_name, tool_args, read_timeout_seconds=timedelta(seconds=30)
                 )
                 return result.content[0].text if result.content else ""
-        # Custom Python tools — execute in Docker sandbox
+        # Custom tools — Python or HTTP
         from core.routes.tools import load_custom_tools
         custom_tools = load_custom_tools()
         target_tool = next((t for t in custom_tools if t["name"] == tool_name), None)
-        if target_tool and target_tool.get("tool_type") == "python":
-            return await self._execute_python_tool(target_tool, tool_args)
+        if target_tool:
+            tool_type = target_tool.get("tool_type", "http")
+            if tool_type == "python":
+                return await self._execute_python_tool(target_tool, tool_args)
+            # HTTP tool — with URL templating and method-aware arg routing
+            return await self._execute_http_tool(target_tool, tool_args)
         raise RuntimeError(f"Tool '{tool_name}' not found in tool router")
 
     async def _execute_python_tool(self, tool: dict, tool_args: dict) -> str:
@@ -514,12 +518,82 @@ class ToolStepExecutor:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    async def _execute_http_tool(self, tool: dict, tool_args: dict) -> str:
+        """Execute a custom HTTP tool with URL templating and method-aware arg routing.
+
+        URL template placeholders:
+          - ``{data}``       → replaced with the full JSON-encoded argument payload
+          - ``{data.field}`` → replaced with the value of ``field`` from tool_args
+                               (dot-notation supported for nested access)
+
+        Remaining (non-consumed) args are sent as:
+          - Query-string params for GET / DELETE
+          - JSON body for POST / PUT
+        """
+        import re as _re
+        import httpx as _httpx
+
+        method = tool.get("method", "POST").upper()
+        url = tool.get("url", "")
+        headers = tool.get("headers", {})
+        if not url:
+            raise ValueError("No URL configured for this tool.")
+
+        consumed_keys: set = set()
+
+        def _resolve_path(obj: dict, path: str):
+            parts = path.split(".")
+            cur = obj
+            for p in parts:
+                if not isinstance(cur, dict) or p not in cur:
+                    return None
+                cur = cur[p]
+            return str(cur) if not isinstance(cur, (dict, list)) else json.dumps(cur)
+
+        def _replace_placeholder(m: "_re.Match") -> str:
+            expr = m.group(1).strip()
+            # {data} → full JSON payload (legacy)
+            if expr == "data":
+                return json.dumps(tool_args)
+            # {data.key} → nested dot-notation (legacy)
+            if expr.startswith("data."):
+                path = expr[len("data."):]
+                top_key = path.split(".")[0]
+                val = _resolve_path(tool_args, path)
+                if val is not None:
+                    consumed_keys.add(top_key)
+                    return val
+            # {key} → bare input schema field name (preferred)
+            if expr in tool_args:
+                consumed_keys.add(expr)
+                v = tool_args[expr]
+                return str(v) if not isinstance(v, (dict, list)) else json.dumps(v)
+            return m.group(0)
+
+        url = _re.sub(r"\{([^}]+)\}", _replace_placeholder, url)
+
+        async with _httpx.AsyncClient() as client:
+            if method in ("GET", "DELETE"):
+                remaining_args = {k: v for k, v in tool_args.items() if k not in consumed_keys}
+                params = {k: (json.dumps(v) if isinstance(v, (dict, list)) else str(v))
+                          for k, v in remaining_args.items()}
+                resp = await client.request(method, url, params=params, headers=headers, timeout=30.0)
+            else:
+                # POST / PUT – all args in body even if some were used in the URL
+                resp = await client.request(method, url, json=tool_args, headers=headers, timeout=30.0)
+
+        try:
+            return json.dumps(resp.json())
+        except Exception:
+            return resp.text or json.dumps({"error": f"Empty response (Status: {resp.status_code})"})
+
     def _load_custom_tools(self) -> list:
         try:
             from core.routes.tools import load_custom_tools
             return load_custom_tools()
         except Exception:
             return []
+
 
 
 class EvaluatorStepExecutor:
