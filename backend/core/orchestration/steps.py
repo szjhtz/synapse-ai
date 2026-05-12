@@ -32,16 +32,22 @@ def _datetime_context() -> str:
 
 
 class AgentStepExecutor:
-    """Run a sub-agent's ReAct loop. Reuses the existing engine."""
+    """Run a sub-agent's ReAct loop. Reuses the existing engine.
+
+    If the configured agent has type=='orchestrator', this delegates to a
+    nested OrchestrationEngine instead of run_agent_step — implementing the
+    sub-workflow composition primitive.
+    """
 
     async def execute(
         self, step: StepConfig, run: OrchestrationRun, engine: "OrchestrationEngine"
     ) -> AsyncGenerator[dict, None]:
         from core.react_engine import run_agent_step
         from core.agent_logger import AgentLogger
+        from core.routes.agents import load_user_agents
         print(f"DEBUG AGENT EXEC: agent_id={step.agent_id} step={step.id}", flush=True)
 
-        from .context import build_origin_aware_context
+        from .context import build_origin_aware_context, snapshot_inputs
         transition = getattr(engine, "current_transition", None)
         if transition is None:
             from .context import TransitionContext
@@ -49,9 +55,21 @@ class AgentStepExecutor:
         prompt, system_prompt_extra = build_origin_aware_context(
             step, run, engine, transition
         )
+        inputs_snapshot = snapshot_inputs(step, run, engine)
 
         # Emit prompt for the orchestration logger (filtered out before SSE)
         yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt, "system_prompt_extra": system_prompt_extra}
+
+        # ── Orchestrator-as-agent: delegate to a nested OrchestrationEngine ──
+        target_agent = next(
+            (a for a in load_user_agents() if a.get("id") == step.agent_id), None
+        )
+        if target_agent and target_agent.get("type") == "orchestrator":
+            async for ev in self._execute_nested_orchestration(
+                step, run, engine, transition, target_agent, prompt, inputs_snapshot
+            ):
+                yield ev
+            return
 
         agent_id = step.agent_id or "default"
         agent_name = engine.agent_names.get(agent_id, agent_id)
@@ -103,7 +121,124 @@ class AgentStepExecutor:
         # Store execution trace for memory across re-invocations
         from .context import build_execution_trace, store_execution_memory
         trace = build_execution_trace(execution_events)
-        store_execution_memory(run, step, trace, agent_name)
+        store_execution_memory(run, step, trace, agent_name, transition, inputs_snapshot)
+
+    async def _execute_nested_orchestration(
+        self,
+        step: StepConfig,
+        run: OrchestrationRun,
+        engine: "OrchestrationEngine",
+        transition,
+        target_agent: dict,
+        prompt: str,
+        inputs_snapshot: dict,
+    ) -> AsyncGenerator[dict, None]:
+        """Run an orchestrator-type agent as a nested sub-orchestration.
+
+        Input mapping:  the resolved prompt becomes the sub-orch's user_input.
+        State scoping:  sub-orch gets a FRESH shared_state — parent's private
+                        keys (_loop_*, _routing_*, _exec_memory_*) are not shared
+                        to avoid collisions.
+        Output mapping: sub-orch's terminal `final` event becomes the parent
+                        step's final_response → written to step.output_key as
+                        usual and recorded in parent execution memory.
+        Recursion:      capped at engine.MAX_NESTED_DEPTH; sub-engine constructed
+                        with depth = parent_depth + 1.
+        Events:         all sub-events tagged with parent orch_step_id +
+                        nested_run_id so the UI can attribute them.
+        """
+        from core.routes.orchestrations import load_orchestrations
+        from core.models_orchestration import Orchestration
+        from .engine import OrchestrationEngine, MAX_NESTED_DEPTH
+
+        sub_orch_id = target_agent.get("orchestration_id")
+        if not sub_orch_id:
+            raise RuntimeError(
+                f"Orchestrator agent '{target_agent.get('id')}' has no orchestration_id"
+            )
+
+        parent_depth = getattr(engine, "depth", 0)
+        if parent_depth + 1 > MAX_NESTED_DEPTH:
+            raise RuntimeError(
+                f"Nested orchestration depth limit exceeded "
+                f"(max {MAX_NESTED_DEPTH}). Possible recursive agent loop."
+            )
+
+        orchs = load_orchestrations()
+        sub_orch_data = next((o for o in orchs if o["id"] == sub_orch_id), None)
+        if not sub_orch_data:
+            raise RuntimeError(
+                f"Sub-orchestration '{sub_orch_id}' (from agent "
+                f"'{target_agent.get('id')}') not found"
+            )
+
+        sub_orch = Orchestration.model_validate(sub_orch_data)
+        sub_engine = OrchestrationEngine(sub_orch, engine.server_module, depth=parent_depth + 1)
+        sub_run_id = f"{run.run_id}__{step.id}_d{parent_depth + 1}"
+        sub_session = run.session_id or f"orch_{run.run_id}"
+
+        agent_name = target_agent.get("name") or target_agent.get("id") or "sub_orchestration"
+        yield {
+            "type": "thinking",
+            "orch_step_id": step.id,
+            "step_name": step.name,
+            "message": f"Delegating to sub-orchestration '{sub_orch.name}' (depth {parent_depth + 1})...",
+        }
+
+        final_response: str | None = None
+        sub_events: list[dict] = []
+        try:
+            async for sub_event in sub_engine.run(
+                initial_input=prompt,
+                run_id=sub_run_id,
+                session_id=sub_session,
+            ):
+                sub_events.append(sub_event)
+                # Capture the sub-engine's terminal final response
+                if sub_event.get("type") == "final" and sub_event.get("intent") == "orchestration":
+                    final_response = sub_event.get("response", "")
+                # Tag for UI attribution and forward
+                yield {
+                    **sub_event,
+                    "orch_step_id": step.id,
+                    "step_name": step.name,
+                    "nested_run_id": sub_run_id,
+                    "nested_orch_id": sub_orch.id,
+                    "nested_depth": parent_depth + 1,
+                }
+        except Exception:
+            raise
+
+        if final_response is None:
+            # Sub-orch finished without a final event (failed or empty). Fall back
+            # to the orchestration_complete event's last shared_state value.
+            for ev in reversed(sub_events):
+                if ev.get("type") == "orchestration_complete":
+                    state = ev.get("final_state") or {}
+                    # last output_key in the sub-orch's steps
+                    for sub_step in reversed(sub_orch.steps):
+                        if sub_step.output_key and sub_step.output_key in state:
+                            final_response = str(state[sub_step.output_key])
+                            break
+                    break
+
+        if final_response is None:
+            raise RuntimeError(
+                f"Sub-orchestration '{sub_orch.name}' ended without a final response"
+            )
+
+        if step.output_key:
+            run.shared_state[step.output_key] = final_response
+
+        # Record memory so re-invocations see what the sub-orch returned.
+        from .context import build_execution_trace, store_execution_memory
+        synth_events = [
+            {"type": "tool_call", "tool_name": "sub_orchestration", "tool_input": {"orchestration": sub_orch.name}},
+            {"type": "tool_result", "result": str(final_response)},
+            {"type": "final", "response": str(final_response)},
+        ]
+        trace = build_execution_trace(synth_events)
+        store_execution_memory(run, step, trace, agent_name, transition, inputs_snapshot)
 
 
 class ToolStepExecutor:
@@ -132,11 +267,12 @@ class ToolStepExecutor:
                    "message": f"No tool configured for TOOL step '{step.name}'"}
             return
 
-        from .context import build_origin_aware_context, TransitionContext
+        from .context import build_origin_aware_context, TransitionContext, snapshot_inputs
         transition = getattr(engine, "current_transition", None)
         if transition is None:
             transition = TransitionContext(origin_type="entry", execution_number=1)
         prompt, system_prompt_extra = build_origin_aware_context(step, run, engine, transition)
+        inputs_snapshot = snapshot_inputs(step, run, engine)
 
         yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt, "system_prompt_extra": system_prompt_extra}
 
@@ -179,6 +315,8 @@ class ToolStepExecutor:
         max_turns = max(1, step.max_turns or 3)
         last_error = None
         final_response = None
+        called_tool: str = ""
+        last_tool_args: dict = {}
 
         for turn in range(max_turns):
             turn_prompt = tool_prompt
@@ -216,6 +354,7 @@ class ToolStepExecutor:
 
             called_tool = tool_call.get("tool", "")
             tool_args = tool_call.get("arguments", {})
+            last_tool_args = tool_args
 
             # tool_execution matches the event type the logger and react_engine emit
             yield {
@@ -258,6 +397,21 @@ class ToolStepExecutor:
 
         if final_response is None:
             raise RuntimeError(f"Tool step '{step.name}' failed after {max_turns} attempt(s): {last_error}")
+
+        # Record execution memory so re-invocations can see prior turn's args + result.
+        from .context import build_execution_trace, store_execution_memory
+        synth_events = [
+            {"type": "tool_call", "tool_name": called_tool, "tool_input": last_tool_args},
+            {"type": "tool_result", "result": str(final_response)},
+            {"type": "final", "response": str(final_response)},
+        ]
+        trace = build_execution_trace(synth_events)
+        store_execution_memory(
+            run, step, trace,
+            agent_name=step.forced_tool or "tool_step",
+            transition=transition,
+            inputs_snapshot=inputs_snapshot,
+        )
 
     async def _execute_tool(self, tool_name: str, tool_args: dict, engine: "OrchestrationEngine") -> str:
         """Execute a tool via MCP session or Docker sandbox (custom Python tools)."""
@@ -942,12 +1096,13 @@ class LLMStepExecutor:
         from core.llm_providers import generate_response as llm_generate, detect_mode_from_model
         from core.config import load_settings
 
-        from .context import build_origin_aware_context
+        from .context import build_origin_aware_context, snapshot_inputs
         transition = getattr(engine, "current_transition", None)
         if transition is None:
             from .context import TransitionContext
             transition = TransitionContext(origin_type="entry", execution_number=1)
         prompt, system_prompt_extra = build_origin_aware_context(step, run, engine, transition)
+        inputs_snapshot = snapshot_inputs(step, run, engine)
 
         yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt, "system_prompt_extra": system_prompt_extra}
         yield {
@@ -963,10 +1118,13 @@ class LLMStepExecutor:
         model = _step_model if _step_model else settings.get("model", "mistral")
         mode = detect_mode_from_model(model)
 
+        # system_prompt_extra already contains datetime + workflow graph + position.
+        sys_prompt = f"You are a helpful assistant. Be concise and accurate.\n\n{system_prompt_extra}"
+
         try:
             response = await llm_generate(
                 prompt_msg=prompt,
-                sys_prompt=f"You are a helpful assistant. Be concise and accurate.\n\n{_datetime_context()}",
+                sys_prompt=sys_prompt,
                 mode=mode,
                 current_model=model,
                 current_settings=settings,
@@ -983,6 +1141,16 @@ class LLMStepExecutor:
 
         if step.output_key:
             run.shared_state[step.output_key] = response
+
+        # Record execution memory so re-invocations can see prior turn's output.
+        from .context import build_execution_trace, store_execution_memory
+        trace = build_execution_trace([{"type": "final", "response": response}])
+        store_execution_memory(
+            run, step, trace,
+            agent_name="llm_step",
+            transition=transition,
+            inputs_snapshot=inputs_snapshot,
+        )
 
         yield {
             "type": "final",

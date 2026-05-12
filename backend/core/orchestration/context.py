@@ -12,6 +12,7 @@ Provides:
 """
 from __future__ import annotations
 
+import datetime
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -19,6 +20,25 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.models_orchestration import StepConfig, OrchestrationRun
     from .engine import OrchestrationEngine
+
+
+def datetime_context() -> str:
+    """Return a markdown block with the current date, time, and timezone.
+
+    Shared by every LLM-involving step so the model has consistent temporal context.
+    """
+    now = datetime.datetime.now().astimezone()
+    tz_name = now.strftime("%Z") or str(now.tzinfo)
+    return (
+        "### CURRENT DATE & TIME CONTEXT\n"
+        f"**Current Date:** {now.strftime('%A, %B %d, %Y')}\n"
+        f"**Current Time:** {now.strftime('%I:%M %p')}\n"
+        f"**Timezone:** {tz_name}\n"
+    )
+
+
+def _truncate(s: str, n: int) -> str:
+    return s if len(s) <= n else s[:n] + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -185,20 +205,73 @@ def build_execution_trace(events: list[dict]) -> dict:
     }
 
 
+def snapshot_inputs(
+    step: "StepConfig",
+    run: "OrchestrationRun",
+    engine: "OrchestrationEngine",
+    max_chars: int = 400,
+) -> dict[str, str]:
+    """Capture {key: truncated_value} for every input that the prompt builder
+    injects into the CONTEXT section — user_input, human-response keys, and
+    declared input_keys. Used to record what the agent saw on each turn so
+    `include_full_history` can re-render past inputs accurately.
+    """
+    snap: dict[str, str] = {}
+
+    if "user_input" in run.shared_state:
+        snap["user_input"] = _truncate(str(run.shared_state["user_input"]), max_chars)
+
+    # Human response keys (mirrors logic in build_origin_aware_context)
+    human_keys = {"human_response"}
+    for s in engine.step_map.values():
+        if s.type and s.type.value == "human" and s.output_key:
+            human_keys.add(s.output_key)
+    for hkey in human_keys:
+        if hkey in run.shared_state and hkey not in snap:
+            snap[hkey] = _truncate(str(run.shared_state[hkey]), max_chars)
+
+    for key in (step.input_keys or []):
+        if key in run.shared_state:
+            snap[key] = _truncate(str(run.shared_state[key]), max_chars)
+
+    return snap
+
+
 def store_execution_memory(
     run: "OrchestrationRun",
     step: "StepConfig",
     trace: dict,
     agent_name: str,
+    transition: "TransitionContext | None" = None,
+    inputs_snapshot: dict[str, str] | None = None,
 ) -> None:
-    """Append execution trace to shared_state under a namespaced key."""
+    """Append execution trace + origin metadata to shared_state under a namespaced key.
+
+    `transition` records what triggered this execution (evaluator decision, loop
+    iteration, etc) — used by full-history rendering to show per-turn provenance.
+    `inputs_snapshot` records the inputs the agent saw on this turn.
+    """
     key = f"_exec_memory_{step.id}"
     history = run.shared_state.get(key)
     if not isinstance(history, list):
         history = []
+
+    origin = None
+    if transition is not None:
+        origin = {
+            "type": transition.origin_type,
+            "routing_decision": transition.routing_decision,
+            "routing_reasoning": transition.routing_reasoning,
+            "loop_iteration": transition.loop_iteration,
+            "loop_total": transition.loop_total,
+            "from_step_name": transition.from_step_name,
+        }
+
     history.append({
         "execution": len(history) + 1,
         "agent": agent_name,
+        "origin": origin,
+        "inputs": inputs_snapshot or {},
         "trace": trace,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
@@ -215,7 +288,11 @@ def get_execution_memory(run: "OrchestrationRun", step_id: str) -> list[dict]:
 # Workflow graph renderer
 # ---------------------------------------------------------------------------
 
-def build_workflow_graph_markdown(orch: "Orchestration", current_step_id: str) -> str:  # type: ignore[name-defined]
+def build_workflow_graph_markdown(
+    orch: "Orchestration",  # type: ignore[name-defined]
+    current_step_id: str,
+    exec_counts: dict[str, int] | None = None,
+) -> str:
     """
     Build a compact markdown map of the orchestration graph.
 
@@ -223,6 +300,9 @@ def build_workflow_graph_markdown(orch: "Orchestration", current_step_id: str) -
     Branch steps inside parallel/loop blocks appear only as sub-bullets under
     their parent — never as top-level numbered steps.  Cycles are shown as
     "(retry)" references.
+
+    `exec_counts` maps step_id → execution count; steps with count > 1 get
+    a "(×N)" suffix so the LLM sees how many times each step has run.
 
     Example output:
         ### WORKFLOW: Research Mid term stock
@@ -305,17 +385,21 @@ def build_workflow_graph_markdown(orch: "Orchestration", current_step_id: str) -
     lines.append("")
     lines.append("#### Steps")
 
+    counts = exec_counts or {}
+
     for sid in ordered_ids:
         step = step_map[sid]
         t = _type_val(step)
         here = "   ← YOU ARE HERE" if sid == current_step_id else ""
         out = f" → `{step.output_key}`" if step.output_key else ""
+        run_count = counts.get(sid, 0)
+        runs = f" (×{run_count})" if run_count > 1 else ""
 
         if t == StepType.END.value:
-            lines.append(f"{num[sid]}. **{step.name}** [END]{here}")
+            lines.append(f"{num[sid]}. **{step.name}** [END]{runs}{here}")
             continue
 
-        lines.append(f"{num[sid]}. **{step.name}** [{t}]{out}{here}")
+        lines.append(f"{num[sid]}. **{step.name}** [{t}]{out}{runs}{here}")
 
         # Evaluator: named routes with cycle detection
         if t == StepType.EVALUATOR.value and step.route_map:
@@ -359,6 +443,98 @@ def build_workflow_graph_markdown(orch: "Orchestration", current_step_id: str) -
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
+
+def _origin_label(origin: dict | None, execution: int) -> str:
+    """Human-readable label for what triggered a memorised execution."""
+    if not origin:
+        return "initial invocation" if execution == 1 else "re-invocation"
+    otype = origin.get("type")
+    if otype == "entry" or execution == 1:
+        return "initial invocation"
+    if otype == "evaluator":
+        decision = origin.get("routing_decision")
+        if decision:
+            return f'evaluator routed back: "{decision}"'
+        return "evaluator routed back"
+    if otype == "loop":
+        it = origin.get("loop_iteration")
+        total = origin.get("loop_total")
+        if it and total:
+            return f"loop iteration {it} of {total}"
+        if it:
+            return f"loop iteration {it}"
+        return "loop iteration"
+    if otype == "human_response":
+        return "after human input"
+    if otype == "linear":
+        prev = origin.get("from_step_name")
+        return f'after "{prev}" (linear)' if prev else "linear re-entry"
+    return otype or "re-invocation"
+
+
+def _render_full_history(memory: list[dict]) -> str:
+    """Render every recorded turn as inputs → tools → output."""
+    lines: list[str] = ["## REVISION HISTORY (all prior turns)"]
+    for entry in memory:
+        execution = entry.get("execution", 0)
+        origin = entry.get("origin") or {}
+        label = _origin_label(origin, execution)
+        lines.append(f"\n### Turn {execution} — {label}")
+
+        # Inputs at the time of this turn
+        inputs = entry.get("inputs") or {}
+        if inputs:
+            lines.append("Inputs:")
+            for k, v in inputs.items():
+                lines.append(f"  - {k}: {v}")
+
+        # Evaluator feedback that triggered this turn (if any)
+        reasoning = origin.get("routing_reasoning")
+        if reasoning:
+            lines.append(f'Evaluator feedback: "{reasoning}"')
+
+        # Tool calls
+        trace = entry.get("trace") or {}
+        tool_calls = trace.get("tool_calls") or []
+        if tool_calls:
+            lines.append(f"Tools used ({len(tool_calls)} calls):")
+            lines.append(_format_tool_calls(tool_calls))
+        else:
+            tools_used = trace.get("tools_used") or []
+            if tools_used:
+                lines.append(f"Tools used: {', '.join(tools_used)}")
+            else:
+                lines.append("Tools used: (none)")
+
+        # Final output produced on that turn
+        final_out = str(trace.get("final_output") or "")
+        if final_out:
+            if len(final_out) > 800:
+                from .summarizer import smart_truncate
+                final_out = smart_truncate(final_out, 800)
+            lines.append(f"Output:\n{final_out}")
+
+    return "\n".join(lines)
+
+
+def _render_last_attempt(last: dict) -> str:
+    """Render only the most recent turn (legacy behavior when include_full_history is off)."""
+    trace = last.get("trace", {})
+    lines = ["## YOUR PREVIOUS WORK ON THIS TASK"]
+    tool_calls = trace.get("tool_calls", [])
+    if tool_calls:
+        lines.append(
+            f"Tools used ({len(tool_calls)} calls):\n"
+            + _format_tool_calls(tool_calls)
+        )
+    else:
+        tools_used = trace.get("tools_used", [])
+        if tools_used:
+            lines.append(f"Tools used: {', '.join(tools_used)}")
+        else:
+            lines.append("No tools were used.")
+    return "\n".join(lines)
+
 
 def _format_tool_calls(tool_calls: list[dict]) -> str:
     """Format tool call list into a compact readable block."""
@@ -494,27 +670,15 @@ def build_origin_aware_context(
         sections.append("\n".join(feedback_lines))
 
     # ------------------------------------------------------------------
-    # Section: YOUR PREVIOUS WORK (on any re-invocation)
+    # Section: YOUR PREVIOUS WORK / REVISION HISTORY (on any re-invocation)
     # ------------------------------------------------------------------
     if transition.execution_number > 1:
         memory = get_execution_memory(run, step.id)
         if memory:
-            last = memory[-1]
-            trace = last.get("trace", {})
-            prev_work_lines = ["## YOUR PREVIOUS WORK ON THIS TASK"]
-            tool_calls = trace.get("tool_calls", [])
-            if tool_calls:
-                prev_work_lines.append(
-                    f"Tools used ({len(tool_calls)} calls):\n"
-                    + _format_tool_calls(tool_calls)
-                )
+            if step.include_full_history:
+                sections.append(_render_full_history(memory))
             else:
-                tools_used = trace.get("tools_used", [])
-                if tools_used:
-                    prev_work_lines.append(f"Tools used: {', '.join(tools_used)}")
-                else:
-                    prev_work_lines.append("No tools were used.")
-            sections.append("\n".join(prev_work_lines))
+                sections.append(_render_last_attempt(memory[-1]))
 
     # ------------------------------------------------------------------
     # Section: HUMAN INPUT (when invoked after a human step)
@@ -611,10 +775,22 @@ def build_origin_aware_context(
     prompt = "\n\n---\n\n".join(sections)
 
     # ------------------------------------------------------------------
-    # System prompt addition — workflow graph + step position
+    # System prompt addition — datetime + workflow graph + step position
     # ------------------------------------------------------------------
-    graph_md = build_workflow_graph_markdown(engine.orch, step.id)
+    # Count completed executions per step for the graph (×N badges).
+    exec_counts: dict[str, int] = {}
+    for h in run.step_history:
+        sid = h.get("step_id")
+        if sid:
+            exec_counts[sid] = exec_counts.get(sid, 0) + 1
+    # Use execution_number for the active step (counts this in-flight run).
+    if transition.execution_number > 1:
+        exec_counts[step.id] = transition.execution_number
+
+    graph_md = build_workflow_graph_markdown(engine.orch, step.id, exec_counts)
     sys_lines = [
+        datetime_context(),
+        "",
         graph_md,
         "",
         f"You are currently executing step **\"{step_name}\"** (execution #{transition.execution_number}).",

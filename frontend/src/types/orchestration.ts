@@ -62,6 +62,9 @@ export interface StepConfig {
     timeout_seconds?: number;
     allowed_tools?: string[];
 
+    // On re-invocation, include every prior turn (inputs/tools/output) in the prompt.
+    include_full_history?: boolean;
+
     // Graph routing
     next_step_id?: string;
     max_iterations?: number;

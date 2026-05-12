@@ -14,12 +14,16 @@ from .steps import STEP_EXECUTORS
 from .logger import OrchestrationLogger
 
 
+MAX_NESTED_DEPTH = 3
+
+
 class OrchestrationEngine:
     """Runs an orchestration by walking through its step graph."""
 
-    def __init__(self, orchestration: Orchestration, server_module):
+    def __init__(self, orchestration: Orchestration, server_module, depth: int = 0):
         self.orch = orchestration
         self.server_module = server_module
+        self.depth = depth  # 0 = top-level run; >0 = nested sub-orchestration
         self.step_map: dict[str, StepConfig] = {s.id: s for s in orchestration.steps}
         self.executors = STEP_EXECUTORS
         self.agent_names: dict[str, str] = self._load_agent_names()

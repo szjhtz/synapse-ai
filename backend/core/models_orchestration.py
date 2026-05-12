@@ -88,6 +88,10 @@ class StepConfig(BaseModel):
     timeout_seconds: int = 300
     allowed_tools: list[str] | None = None  # Override agent's tools (narrows only)
 
+    # On re-invocation (evaluator feedback or loop), include every prior turn's
+    # inputs/tools/output in the prompt instead of only the last attempt.
+    include_full_history: bool = False
+
     # Graph routing
     next_step_id: str | None = None  # Linear next step / loop "done" path
     max_iterations: int = 3  # Max times this step can execute in one run (loop guard)

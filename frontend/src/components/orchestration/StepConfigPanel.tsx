@@ -83,6 +83,7 @@ export function StepConfigPanel({ step, agents, allStepIds, onUpdate, onDelete, 
                             <label className="text-xs text-zinc-400 block mb-1">Prompt Template</label>
                             <VaultTextarea className={textareaCls} rows={4} value={step.prompt_template || ''} onChange={(e) => update({ prompt_template: e.target.value })} placeholder="Use {state.key} to reference shared state, @ to reference vault files..." />
                         </div>
+                        <HistoryToggle step={step} update={update} />
                     </>
                 )}
 
@@ -117,6 +118,7 @@ export function StepConfigPanel({ step, agents, allStepIds, onUpdate, onDelete, 
                                 ))}
                             </select>
                         </div>
+                        <HistoryToggle step={step} update={update} />
                     </>
                 )}
 
@@ -608,6 +610,29 @@ function ToolStepConfig({ step, update, textareaCls, selectCls, availableModels 
                     ))}
                 </select>
             </div>
+            <HistoryToggle step={step} update={update} />
+        </div>
+    );
+}
+
+/** Checkbox: on re-invocation, show every prior turn's inputs/tools/output instead of just the last. */
+function HistoryToggle({ step, update }: { step: StepConfig; update: (patch: Partial<StepConfig>) => void }) {
+    return (
+        <div className="rounded bg-zinc-900/60 border border-zinc-700 px-3 py-2">
+            <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                    type="checkbox"
+                    checked={step.include_full_history ?? false}
+                    onChange={(e) => update({ include_full_history: e.target.checked || undefined })}
+                    className="mt-0.5 accent-blue-500"
+                />
+                <span className="text-xs text-zinc-300">
+                    Include full revision history
+                    <span className="block text-[10px] text-zinc-500 mt-0.5">
+                        On re-invocation (evaluator feedback or loop iteration), show every prior turn&apos;s inputs, tools, and output — not just the last attempt. Useful for feedback loops; increases prompt length.
+                    </span>
+                </span>
+            </label>
         </div>
     );
 }
