@@ -88,6 +88,16 @@ class StepConfig(BaseModel):
     timeout_seconds: int = 300
     allowed_tools: list[str] | None = None  # Override agent's tools (narrows only)
 
+    # Response cache (skipped for AGENT steps — state-dependent behaviour)
+    cache_responses_enabled: bool = False
+    cache_semantic_enabled: bool = False
+    cache_response_ttl_seconds: int = 3600
+    cache_response_threshold: float = 0.95
+    # Tool cache (always-on for tools in DETERMINISTIC_TOOLS registry; this toggle
+    # lets a step opt OUT, e.g. when freshness is critical for a specific run).
+    cache_tools_enabled: bool = True
+    cache_tool_ttl_seconds: int = 3600
+
     # On re-invocation (evaluator feedback or loop), include every prior turn's
     # inputs/tools/output in the prompt instead of only the last attempt.
     include_full_history: bool = False
@@ -139,6 +149,12 @@ class OrchestrationRun(BaseModel):
     # Cost tracking
     total_tokens_used: int = 0
     total_cost_usd: float = 0.0
+    # Cache stats (populated by the engine from per-step usage logs)
+    cache_read_tokens_total: int = 0
+    cache_write_tokens_total: int = 0
+    cache_hit_count: int = 0
+    cache_miss_count: int = 0
+    estimated_savings_usd: float = 0.0
 
     started_at: str | None = None
     ended_at: str | None = None

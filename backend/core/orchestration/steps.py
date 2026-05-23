@@ -681,6 +681,11 @@ class EvaluatorStepExecutor:
                 agent_id=step.agent_id or "evaluator",
                 source="orchestration",
                 run_id=run.run_id,
+                cache_response=step.cache_responses_enabled,
+                cache_response_semantic=step.cache_semantic_enabled,
+                cache_response_ttl=step.cache_response_ttl_seconds,
+                cache_response_step_id=step.id,
+                cache_response_threshold=step.cache_response_threshold,
             )
             print(f"DEBUG: 🔀 Evaluator LLM response: {response}")
 
@@ -1204,6 +1209,11 @@ class LLMStepExecutor:
                 agent_id=step.agent_id or "llm_step",
                 source="orchestration",
                 run_id=run.run_id,
+                cache_response=step.cache_responses_enabled,
+                cache_response_semantic=step.cache_semantic_enabled,
+                cache_response_ttl=step.cache_response_ttl_seconds,
+                cache_response_step_id=step.id,
+                cache_response_threshold=step.cache_response_threshold,
             )
         except Exception as e:
             from core.llm_providers import LLMError

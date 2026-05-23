@@ -936,6 +936,27 @@ async def run_agent_step(
                     yield {"type": "tool_result", "tool_name": tool_name, "preview": "Tool removed"}
                     continue
 
+                # ===== DETERMINISTIC TOOL CACHE LOOKUP =====
+                # Short-circuit before dispatching when this tool is in the
+                # DETERMINISTIC_TOOLS registry and we have a live cache entry.
+                # Side-effectful tools (bash, sql_agent, web_scraper, sandbox)
+                # are never cached — see core.cache.tool_cache.DETERMINISTIC_TOOLS.
+                from core.cache import tool_cache as _tool_cache
+                if _tool_cache.is_cacheable(tool_name):
+                    _cached = _tool_cache.get(tool_name, tool_args, session_id=session_id)
+                    if _cached is not None:
+                        raw_output = _cached if isinstance(_cached, str) else json.dumps(_cached)
+                        current_context_text += f"\n[Turn {turn + 1} — Observation] Tool '{tool_name}' returned (cached):\n{raw_output}\n"
+                        tools_used_summary.append(f"{tool_name}: {raw_output}")
+                        preview = raw_output[:500] + "..." if len(raw_output) > 500 else raw_output
+                        print(f"DEBUG: ⚡ tool_cache hit ({tool_name})")
+                        yield {"type": "tool_cache_hit", "tool_name": tool_name, "preview": preview}
+                        yield {"type": "tool_result", "tool_name": tool_name, "preview": preview}
+                        if post_tool_hook is not None:
+                            async for _extra in post_tool_hook(tool_name, raw_output):
+                                yield _extra
+                        continue
+
                 # ===== BUILT-IN EXECUTOR OVERRIDE (e.g. builder) =====
                 # Checked before MCP/custom routing; returns None to fall through.
 
@@ -1035,6 +1056,8 @@ async def run_agent_step(
                     preview = raw_output[:500] + "..." if len(raw_output) > 500 else raw_output
                     print(f"DEBUG: 🏗 Builder tool ({tool_name}): {preview}")
                     yield {"type": "tool_result", "tool_name": tool_name, "preview": preview}
+                    if _tool_cache.is_cacheable(tool_name) and not raw_output.startswith('{"error"'):
+                        _tool_cache.set(tool_name, tool_args, raw_output, session_id=session_id)
                     if post_tool_hook is not None:
                         async for _extra in post_tool_hook(tool_name, raw_output):
                             yield _extra
@@ -1381,6 +1404,8 @@ async def run_agent_step(
                     # MCP tool results are no longer embedded in ChromaDB
                     preview = raw_output[:500] + "..." if len(raw_output) > 500 else raw_output
                     yield {"type": "tool_result", "tool_name": tool_name, "preview": preview}
+                    if _tool_cache.is_cacheable(tool_name):
+                        _tool_cache.set(tool_name, tool_args, raw_output, session_id=session_id)
                     if post_tool_hook is not None:
                         async for _extra in post_tool_hook(tool_name, raw_output):
                             yield _extra

@@ -50,8 +50,13 @@ def load_settings():
         "global_config": {},
         "vault_enabled": True,
         "vault_threshold": 100000,
-        "auto_compact_enabled": False,
-        "auto_compact_threshold": 100000,
+        "auto_compact_enabled": True,
+        "auto_compact_threshold": 80000,
+        # Prompt caching: decorate provider payloads with cache_control markers
+        # so subsequent ReAct turns reuse the cached system + tools prefix.
+        # ~50–80% cost reduction on multi-turn agents at the cost of a 25% write
+        # surcharge on the first turn. Disable only if a provider misbehaves.
+        "prompt_cache_enabled": True,
         "allow_db_write": False,
         "coding_agent_enabled": True,
         "report_agent_enabled": True,

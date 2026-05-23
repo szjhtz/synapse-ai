@@ -52,6 +52,52 @@ async def get_orchestration(orch_id: str):
     return orch
 
 
+@router.get("/api/orchestrations/{orch_id}/estimate")
+async def estimate_orchestration_cost(orch_id: str, sample_size: int = 5):
+    """Estimate next-run cost based on the last N runs' usage logs.
+
+    Returns the average cost and average cache hit-rate across recent runs.
+    When no history exists, returns zeros — the UI should show this as
+    "no prior runs" rather than $0.00.
+    """
+    from core.usage_tracker import get_usage_logs
+    # Pull recent orchestration logs and filter to this orch_id's runs.
+    raw = get_usage_logs(limit=500, source="orchestration")
+    by_run: dict[str, dict] = {}
+    for r in raw:
+        rid = r.get("run_id") or ""
+        if not rid.startswith(f"run_{orch_id}_"):
+            continue
+        b = by_run.setdefault(rid, {
+            "cost": 0.0, "requests": 0, "hits": 0,
+            "cache_read": 0, "cache_write": 0,
+        })
+        b["cost"] += float(r.get("estimated_cost") or 0.0)
+        b["requests"] += 1
+        if r.get("response_cache_hit"):
+            b["hits"] += 1
+        b["cache_read"] += int(r.get("cache_read_tokens") or 0)
+        b["cache_write"] += int(r.get("cache_write_tokens") or 0)
+
+    runs_sorted = sorted(by_run.items(), key=lambda kv: kv[0], reverse=True)[:sample_size]
+    if not runs_sorted:
+        return {
+            "sample_size": 0,
+            "average_cost_usd": 0.0,
+            "average_cache_hit_rate": 0.0,
+            "average_cache_read_tokens": 0,
+        }
+    avg_cost = sum(b[1]["cost"] for b in runs_sorted) / len(runs_sorted)
+    avg_hit = sum((b[1]["hits"] / b[1]["requests"]) for b in runs_sorted) / len(runs_sorted)
+    avg_cache_read = sum(b[1]["cache_read"] for b in runs_sorted) / len(runs_sorted)
+    return {
+        "sample_size": len(runs_sorted),
+        "average_cost_usd": round(avg_cost, 6),
+        "average_cache_hit_rate": round(avg_hit, 4),
+        "average_cache_read_tokens": int(avg_cache_read),
+    }
+
+
 @router.post("/api/orchestrations")
 async def create_or_update_orchestration(orch: Orchestration):
     orchs = load_orchestrations()
