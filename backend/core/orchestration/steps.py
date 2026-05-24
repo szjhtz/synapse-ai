@@ -188,6 +188,11 @@ class AgentStepExecutor:
             "message": f"Delegating to sub-orchestration '{sub_orch.name}' (depth {parent_depth + 1})...",
         }
 
+        # Lifecycle meta-events that belong to the sub-orch's own run; forwarding
+        # them would confuse the parent's frontend state (premature "complete" banners,
+        # wrong step-start banners, etc.).
+        _NESTED_FILTER_TYPES = {"orchestration_start", "orchestration_complete", "orchestration_end"}
+
         final_response: str | None = None
         sub_events: list[dict] = []
         try:
@@ -200,9 +205,17 @@ class AgentStepExecutor:
                 # Capture the sub-engine's terminal final response
                 if sub_event.get("type") == "final" and sub_event.get("intent") == "orchestration":
                     final_response = sub_event.get("response", "")
-                # Tag for UI attribution and forward
+
+                # Skip sub-orch lifecycle events — they pollute the parent's UI
+                if sub_event.get("type") in _NESTED_FILTER_TYPES:
+                    continue
+
+                # Override run_id with the PARENT's run_id so the frontend routes
+                # human-input calls to the parent run (not the sub-run directly).
+                # The sub-run id is preserved in nested_run_id for backend resume logic.
                 yield {
                     **sub_event,
+                    "run_id": run.run_id,
                     "orch_step_id": step.id,
                     "step_name": step.name,
                     "nested_run_id": sub_run_id,

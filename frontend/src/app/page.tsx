@@ -952,7 +952,7 @@ export default function Home() {
         setMessages(prev => [...prev, {
           role: 'assistant',
           content: `❌ Step failed: ${(data.error as string) || 'Unknown error'}`,
-          msgType: 'orchestration_start',
+          msgType: 'orchestration_complete',
         }]);
         break;
 
