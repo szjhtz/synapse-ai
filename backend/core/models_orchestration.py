@@ -147,6 +147,9 @@ class OrchestrationRun(BaseModel):
     waiting_for_human: bool = False
     human_prompt: str | None = None
     human_fields: list[dict[str, str]] = []
+    # Nested-orchestration human-in-the-loop tracking
+    nested_run_id: str | None = None   # sub-run paused waiting for human input
+    nested_orch_id: str | None = None  # sub-orchestration definition ID
 
     # Cost tracking
     total_tokens_used: int = 0

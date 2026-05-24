@@ -175,6 +175,14 @@ class OrchestrationEngine:
                                 run.waiting_for_human = True
                                 run.status = "paused"
                                 run.current_step_id = step.id
+                                # Track the sub-run that needs human input when the
+                                # request originated inside a nested orchestration.
+                                if event.get("nested_run_id"):
+                                    run.nested_run_id = event["nested_run_id"]
+                                    run.nested_orch_id = event.get("nested_orch_id")
+                                else:
+                                    run.nested_run_id = None
+                                    run.nested_orch_id = None
                                 state.checkpoint()
                                 if logger:
                                     logger.step_end(step.id, "paused")
@@ -370,6 +378,14 @@ class OrchestrationEngine:
             session_id=run.session_id,
         )
 
+        # If the parent was paused because a NESTED orchestration hit a human step,
+        # resume the sub-run and let it complete before continuing the parent.
+        if run.nested_run_id:
+            async for event in cls._resume_nested_orch(run, engine, human_response, server_module):
+                yield event
+            return
+
+        # Normal path: human step is directly in this orchestration.
         # Move to next step after the HUMAN step
         current_step = engine.step_map.get(run.current_step_id)
 
@@ -386,6 +402,120 @@ class OrchestrationEngine:
 
         if current_step:
             next_id, _ = engine._resolve_next(current_step, run)
+            run.current_step_id = next_id
+
+        state = SharedState(run)
+        async for event in engine._execute_loop(run, state):
+            yield event
+
+    @classmethod
+    async def _resume_nested_orch(
+        cls,
+        run: OrchestrationRun,
+        engine: "OrchestrationEngine",
+        human_response: dict,
+        server_module,
+    ) -> AsyncGenerator[dict, None]:
+        """Resume a parent run whose nested sub-orchestration was paused at a human step.
+
+        Resumes the sub-run, forwards its events tagged with the parent step's
+        context, then writes the sub-orch result to parent shared_state and
+        continues the parent execution loop.
+        """
+        parent_step = engine.step_map.get(run.current_step_id)
+        nested_run_id = run.nested_run_id
+        nested_orch_id = run.nested_orch_id
+        _NESTED_FILTER_TYPES = {"orchestration_start", "orchestration_complete", "orchestration_end"}
+
+        final_response: str | None = None
+        sub_events: list[dict] = []
+
+        async for sub_event in cls.resume(nested_run_id, human_response, server_module):
+            sub_events.append(sub_event)
+
+            # Sub-orch hit another human step (multi-turn human interaction inside nested orch)
+            if sub_event.get("type") == "human_input_required":
+                run.nested_run_id = sub_event.get("nested_run_id") or nested_run_id
+                run.nested_orch_id = sub_event.get("nested_orch_id") or nested_orch_id
+                state = SharedState(run)
+                state.checkpoint()
+                yield {
+                    **sub_event,
+                    "run_id": run.run_id,
+                    "orch_step_id": run.current_step_id,
+                    "step_name": parent_step.name if parent_step else "",
+                    "nested_run_id": nested_run_id,
+                    "nested_orch_id": nested_orch_id,
+                }
+                return
+
+            if sub_event.get("type") == "final" and sub_event.get("intent") == "orchestration":
+                final_response = sub_event.get("response", "")
+
+            # Skip sub-orch lifecycle meta-events (same filter as initial execution)
+            if sub_event.get("type") in _NESTED_FILTER_TYPES:
+                continue
+
+            yield {
+                **sub_event,
+                "run_id": run.run_id,
+                "orch_step_id": run.current_step_id,
+                "step_name": parent_step.name if parent_step else "",
+                "nested_run_id": nested_run_id,
+                "nested_orch_id": nested_orch_id,
+            }
+
+        # Fallback: extract result from orchestration_complete if no "final" event was emitted
+        if final_response is None:
+            from core.routes.orchestrations import load_orchestrations
+            from core.models_orchestration import Orchestration
+            orchs = load_orchestrations()
+            sub_orch_data = next((o for o in orchs if o["id"] == nested_orch_id), None)
+            if sub_orch_data:
+                sub_orch = Orchestration.model_validate(sub_orch_data)
+                for ev in reversed(sub_events):
+                    if ev.get("type") == "orchestration_complete":
+                        state_data = ev.get("final_state") or {}
+                        for sub_step in reversed(sub_orch.steps):
+                            if sub_step.output_key and sub_step.output_key in state_data:
+                                final_response = str(state_data[sub_step.output_key])
+                                break
+                        break
+
+        if final_response is None:
+            run.status = "failed"
+            state = SharedState(run)
+            state.checkpoint()
+            yield {
+                "type": "orchestration_error",
+                "error": "Nested orchestration failed to produce a result after human input",
+            }
+            return
+
+        # Write sub-orch result into parent shared_state
+        if parent_step and parent_step.output_key:
+            run.shared_state[parent_step.output_key] = final_response
+
+        # Record agent step completion in history
+        import time as _time
+        run.step_history.append({
+            "step_id": run.current_step_id,
+            "step_name": parent_step.name if parent_step else "",
+            "step_type": "agent",
+            "status": "completed",
+            "ended_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        })
+
+        # Clear nested context and resume parent from next step after agent step
+        run.nested_run_id = None
+        run.nested_orch_id = None
+        run.waiting_for_human = False
+        run.status = "running"
+
+        if parent_step:
+            next_id, extra_event = engine._resolve_next(parent_step, run)
+            if extra_event:
+                yield extra_event
             run.current_step_id = next_id
 
         state = SharedState(run)
