@@ -118,6 +118,15 @@ def _get_google_oauth_env() -> dict[str, str]:
     token_file = DATA_DIR / "token.json"
     if not creds_file.exists():
         return {}
+
+    # Refresh the Google token (if expired-but-refreshable) before launching
+    # workspace-mcp so the subprocess inherits valid creds and doesn't emit
+    # "ACTION REQUIRED: Google Authentication Needed" on the first tool call.
+    try:
+        from services.google import get_google_credentials
+        get_google_credentials()
+    except Exception as e:
+        print(f"Warning: Token refresh at startup failed: {e}")
     try:
         creds = json.loads(creds_file.read_text())
         installed = creds.get("installed", creds.get("web", {}))

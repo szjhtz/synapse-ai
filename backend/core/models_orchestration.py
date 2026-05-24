@@ -100,7 +100,9 @@ class StepConfig(BaseModel):
 
     # On re-invocation (evaluator feedback or loop), include every prior turn's
     # inputs/tools/output in the prompt instead of only the last attempt.
-    include_full_history: bool = False
+    # Tri-state: True = always include, False = always last-attempt only,
+    # None (default) = auto (full history on any re-run).
+    include_full_history: bool | None = None
 
     # Graph routing
     next_step_id: str | None = None  # Linear next step / loop "done" path

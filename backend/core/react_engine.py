@@ -512,6 +512,7 @@ async def run_agent_step(
     run_id: str | None = None,
     images: list[str] | None = None,
     system_prompt_extra: str | None = None,
+    system_prompt_prefix: str | None = None,
     # ── optional extension params (used by builder wrapper) ───────────────────
     agent_override: dict | None = None,   # skip _resolve_agent_by_id
     tools_override: list | None = None,   # skip aggregate_all_tools; list of OpenAI-format tool dicts
@@ -637,6 +638,10 @@ async def run_agent_step(
     # Inject orchestration-awareness block when called from an orchestration step
     if system_prompt_extra:
         system_prompt_text = system_prompt_text + "\n\n" + system_prompt_extra
+    # Iteration banner: prepended so it can't be drowned out by a long agent
+    # system prompt. Only set on re-runs (execution_number > 1).
+    if system_prompt_prefix:
+        system_prompt_text = system_prompt_prefix + "\n\n" + system_prompt_text
 
     async def generate_response(prompt_msg, sys_prompt, tools=None, history_messages=None, memory_context_text="", images_for_turn=None, tool_name_for_log=None):
         return await llm_generate_response(
@@ -719,6 +724,8 @@ async def run_agent_step(
             # step context, shared state, or turn-budget instructions.
             if system_prompt_extra:
                 active_sys_prompt = active_sys_prompt + "\n\n" + system_prompt_extra
+            if system_prompt_prefix:
+                active_sys_prompt = system_prompt_prefix + "\n\n" + active_sys_prompt
 
             # Determine prompt
             if turn == 0:

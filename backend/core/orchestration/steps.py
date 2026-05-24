@@ -52,13 +52,15 @@ class AgentStepExecutor:
         if transition is None:
             from .context import TransitionContext
             transition = TransitionContext(origin_type="entry", execution_number=1)
-        prompt, system_prompt_extra = build_origin_aware_context(
+        prompt, system_prompt_extra, system_prompt_prefix = build_origin_aware_context(
             step, run, engine, transition
         )
         inputs_snapshot = snapshot_inputs(step, run, engine)
 
         # Emit prompt for the orchestration logger (filtered out before SSE)
-        yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt, "system_prompt_extra": system_prompt_extra}
+        yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt,
+               "system_prompt_extra": system_prompt_extra,
+               "system_prompt_prefix": system_prompt_prefix}
 
         # ── Orchestrator-as-agent: delegate to a nested OrchestrationEngine ──
         target_agent = next(
@@ -99,6 +101,7 @@ class AgentStepExecutor:
                 source="orchestration",
                 run_id=run.run_id,
                 system_prompt_extra=system_prompt_extra,
+                system_prompt_prefix=system_prompt_prefix,
                 model_override=step.model,
             ):
                 execution_events.append(event)
@@ -271,10 +274,12 @@ class ToolStepExecutor:
         transition = getattr(engine, "current_transition", None)
         if transition is None:
             transition = TransitionContext(origin_type="entry", execution_number=1)
-        prompt, system_prompt_extra = build_origin_aware_context(step, run, engine, transition)
+        prompt, system_prompt_extra, system_prompt_prefix = build_origin_aware_context(step, run, engine, transition)
         inputs_snapshot = snapshot_inputs(step, run, engine)
 
-        yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt, "system_prompt_extra": system_prompt_extra}
+        yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt,
+               "system_prompt_extra": system_prompt_extra,
+               "system_prompt_prefix": system_prompt_prefix}
 
         # Model resolution — same pattern as EvaluatorStepExecutor and LLMStepExecutor
         settings = load_settings()
@@ -325,9 +330,12 @@ class ToolStepExecutor:
 
             print(f"DEBUG TOOL STEP: turn {turn + 1}/{max_turns} model={model} tool={tool_name}", flush=True)
             try:
+                tool_sys_prompt = "You are a tool-calling assistant. Output ONLY valid JSON."
+                if system_prompt_prefix:
+                    tool_sys_prompt = system_prompt_prefix + "\n\n" + tool_sys_prompt
                 response = await llm_generate(
                     prompt_msg=turn_prompt,
-                    sys_prompt="You are a tool-calling assistant. Output ONLY valid JSON.",
+                    sys_prompt=tool_sys_prompt,
                     mode=mode,
                     current_model=model,
                     current_settings=settings,
@@ -1178,10 +1186,12 @@ class LLMStepExecutor:
         if transition is None:
             from .context import TransitionContext
             transition = TransitionContext(origin_type="entry", execution_number=1)
-        prompt, system_prompt_extra = build_origin_aware_context(step, run, engine, transition)
+        prompt, system_prompt_extra, system_prompt_prefix = build_origin_aware_context(step, run, engine, transition)
         inputs_snapshot = snapshot_inputs(step, run, engine)
 
-        yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt, "system_prompt_extra": system_prompt_extra}
+        yield {"type": "_log_prompt", "orch_step_id": step.id, "prompt": prompt,
+               "system_prompt_extra": system_prompt_extra,
+               "system_prompt_prefix": system_prompt_prefix}
         yield {
             "type": "thinking",
             "orch_step_id": step.id,
@@ -1196,7 +1206,11 @@ class LLMStepExecutor:
         mode = detect_mode_from_model(model)
 
         # system_prompt_extra already contains datetime + workflow graph + position.
+        # system_prompt_prefix is the iteration banner (re-runs only); prepend it
+        # so it appears at the top of the system prompt.
         sys_prompt = f"You are a helpful assistant. Be concise and accurate.\n\n{system_prompt_extra}"
+        if system_prompt_prefix:
+            sys_prompt = system_prompt_prefix + "\n\n" + sys_prompt
 
         try:
             response = await llm_generate(

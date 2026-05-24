@@ -307,10 +307,6 @@ async def get_config():
         # Mask: show only last 4 chars, e.g. ****h453
         masked_client_id = ("****" + client_id_full[-8:]) if len(client_id_full) > 8 else "****"
 
-        # Connected only if both the main token and the workspace-mcp token exist
-        mcp_token_file = os.path.join(DATA_DIR, "google-credentials", "token.json")
-        is_connected = os.path.exists(TOKEN_FILE) and os.path.exists(mcp_token_file)
-
         # Read user email from token.json if available
         user_email = None
         if has_token:
@@ -330,6 +326,20 @@ async def get_config():
             except Exception:
                 pass
 
+        # Real connectivity check: token must be valid (or refreshable) AND
+        # workspace-mcp must have a token file it can read. get_google_credentials()
+        # validates, auto-refreshes, and syncs to the MCP dir on success.
+        is_connected = False
+        try:
+            from services.google import get_google_credentials
+            if get_google_credentials() is not None:
+                mcp_dir = os.path.join(DATA_DIR, "google-credentials")
+                per_user = user_email and os.path.exists(os.path.join(mcp_dir, f"{user_email}.json"))
+                generic = os.path.exists(os.path.join(mcp_dir, "token.json"))
+                is_connected = bool(per_user or generic)
+        except Exception as e:
+            print(f"Warning: get_google_credentials() check failed: {e}")
+
         return {
             "has_credentials": True,
             "client_id": masked_client_id,
@@ -338,9 +348,7 @@ async def get_config():
             "user_email": user_email,
         }
     except Exception as e:
-        mcp_token_file = os.path.join(DATA_DIR, "google-credentials", "token.json")
-        is_connected = os.path.exists(TOKEN_FILE) and os.path.exists(mcp_token_file)
-        return {"has_credentials": True, "error": str(e), "is_connected": is_connected}
+        return {"has_credentials": True, "error": str(e), "is_connected": False}
 
 
 @router.get("/api/file")
