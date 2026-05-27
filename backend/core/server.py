@@ -177,6 +177,20 @@ def _build_native_mcp_servers() -> list[dict]:
     vault_path = str(DATA_DIR / "vault")
     # Always start with vault; include any configured repo paths on top.
     fs_paths = repo_paths + [vault_path]
+    # Also include user-configured directories from General Settings ("Allowed
+    # Directories"). Read fresh so a restart picks up edits without a backend
+    # reboot. Filter to existing dirs and de-duplicate against paths we already
+    # have so the MCP server doesn't see the same root twice.
+    extra_dirs = [
+        d for d in load_settings().get("bash_allowed_dirs", [])
+        if d and os.path.isdir(d)
+    ]
+    seen = {os.path.realpath(p) for p in fs_paths}
+    for d in extra_dirs:
+        rp = os.path.realpath(d)
+        if rp not in seen:
+            fs_paths.append(d)
+            seen.add(rp)
     if not repo_paths:
         print("Warning: No repos configured — starting filesystem MCP server with vault access only.")
     servers.append({

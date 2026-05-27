@@ -127,6 +127,7 @@ async def update_settings(settings: Settings):
     existing = load_settings()
     # Never overwrite the bcrypt hash via the general settings endpoint
     data.pop("login_password_hash", None)
+    prev_bash_dirs = list(existing.get("bash_allowed_dirs", []))
     existing.update(data)
     data = existing
 
@@ -134,6 +135,14 @@ async def update_settings(settings: Settings):
 
     # Reinitialize memory so embeddings provider matches the new mode.
     import core.server as _server
+
+    # If the user's allowed directories changed, restart the Filesystem MCP
+    # server so its allowed roots match what the bash tool sees.
+    if list(data.get("bash_allowed_dirs", [])) != prev_bash_dirs:
+        try:
+            await _server.restart_filesystem_mcp()
+        except Exception as e:
+            print(f"Warning: Failed to restart filesystem MCP after settings update: {e}")
     try:
         from core.memory import MemoryStore as _MemoryStore
     except ImportError:

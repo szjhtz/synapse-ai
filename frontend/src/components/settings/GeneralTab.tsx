@@ -468,9 +468,9 @@ export function GeneralTab({
 
             {/* Bash Command Directories */}
             <div className="space-y-4">
-                <label className="text-xs uppercase font-bold text-zinc-500 tracking-wider">Bash Command Directories</label>
+                <label className="text-xs uppercase font-bold text-zinc-500 tracking-wider">Allowed Directories</label>
                 <p className="text-xs text-zinc-600">
-                    Extra directories the bash tool can execute commands in.
+                    Directories the bash tool and filesystem MCP server can access.
                     Linked repos and vault are always included automatically.
                 </p>
                 {bashAllowedDirs.length > 0 && (
