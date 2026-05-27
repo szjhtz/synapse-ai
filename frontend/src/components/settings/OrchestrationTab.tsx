@@ -874,6 +874,7 @@ export function OrchestrationTab() {
                             runLog={runLog}
                             runInput={runInput}
                             setRunInput={setRunInput}
+                            onStartRun={startRun}
                             humanPrompt={humanPrompt}
                             humanContext={humanContext}
                             humanResponse={humanResponse}
@@ -1076,7 +1077,7 @@ function ResponseModal({ stepName, stepType, content, onClose }: { stepName: str
 
 // --- Bottom panel with collapsible sections ---
 function BottomPanel({
-    draft, setDraft, runStatus, runLog, runInput, setRunInput,
+    draft, setDraft, runStatus, runLog, runInput, setRunInput, onStartRun,
     humanPrompt, humanContext, humanResponse, setHumanResponse, onSubmitHuman, onOpenResponseModal,
     runId, onResumeRun, pastRuns, onRestoreRun,
 }: {
@@ -1086,6 +1087,7 @@ function BottomPanel({
     runLog: LogEntry[];
     runInput: string;
     setRunInput: (v: string) => void;
+    onStartRun: () => void;
     humanPrompt: string | null;
     humanContext: string | null;
     humanResponse: string;
@@ -1285,7 +1287,7 @@ function BottomPanel({
                                     value={runInput}
                                     onChange={(e) => setRunInput(e.target.value)}
                                     placeholder="Initial input for the orchestration..."
-                                    onKeyDown={(e) => { if (e.key === 'Enter') { /* startRun triggered from top bar */ } }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') onStartRun(); }}
                                 />
                                 {(runStatus === 'failed' || runStatus === 'cancelled') && runId && (
                                     <button
